@@ -38,7 +38,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 @st.cache_data
 def load_data(rezim_rada):
-    fajl = "nekretnine_sa_ulicama.csv" if rezim_rada == "Kupovina stanova" else "izdavanje_srb_geo.csv"
+    fajl = "nekretnina_srb_geo.csv" if rezim_rada == "Kupovina stanova" else "izdavanje_srb_geo.csv"
     try:
         df = pd.read_csv(fajl)
         if 'Kirija_EUR' in df.columns:
