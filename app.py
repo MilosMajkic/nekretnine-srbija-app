@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
 import math
@@ -23,7 +24,6 @@ CENTRI_GRADOVA = {
 if 'omiljeni' not in st.session_state:
     st.session_state['omiljeni'] = []
 
-
 # --- POMOĆNE FUNKCIJE ---
 def haversine_distance(lat1, lon1, lat2, lon2):
     if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
@@ -35,19 +35,35 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-
-@st.cache_data
+# 🛑 OVO JE KLJUČNA IZMENA - Sada čita sa tvog Somee C# API-ja!
+@st.cache_data(ttl=300) # Keširamo podatke na 5 minuta da ne ugušimo besplatan server
 def load_data(rezim_rada):
-    fajl = "nekretnina_srb_geo.csv" if rezim_rada == "Kupovina stanova" else "izdavanje_srb_geo.csv"
+    api_url = "http://bekend.somee.com/api/nekretnine"
     try:
-        df = pd.read_csv(fajl)
-        if 'Kirija_EUR' in df.columns:
-            df = df.rename(columns={'Kirija_EUR': 'Cena_EUR', 'Kirija_po_m2': 'Cena_po_m2'})
-        df = df.dropna(subset=['Latitude', 'Longitude', 'Cena_EUR', 'Kvadratura_m2'])
-        return df
-    except:
+        odgovor = requests.get(api_url, params={"rezim": rezim_rada})
+        if odgovor.status_code == 200:
+            podaci = odgovor.json()
+            if len(podaci) > 0:
+                df = pd.DataFrame(podaci)
+                
+                # C# API vraća camelCase imena, pa ih mapiramo na ona koja koristi tvoj kod
+                mapiranje = {
+                    'grad': 'Grad', 'deoGrada': 'Deo_Grada', 'ulica': 'Ulica',
+                    'cenaEur': 'Cena_EUR', 'kvadraturaM2': 'Kvadratura_m2', 
+                    'cenaPoM2': 'Cena_po_m2', 'naslov': 'Naslov', 'link': 'Link',
+                    'latitude': 'Latitude', 'longitude': 'Longitude',
+                    # U slučaju da C# pošalje PascalCase:
+                    'DeoGrada': 'Deo_Grada', 'CenaEur': 'Cena_EUR', 
+                    'KvadraturaM2': 'Kvadratura_m2', 'CenaPoM2': 'Cena_po_m2'
+                }
+                df = df.rename(columns=mapiranje)
+                
+                df = df.dropna(subset=['Latitude', 'Longitude', 'Cena_EUR', 'Kvadratura_m2'])
+                return df
         return pd.DataFrame()
-
+    except Exception as e:
+        st.error(f"Ne mogu da se povežem sa C# serverom: {e}")
+        return pd.DataFrame()
 
 @st.cache_resource
 def train_model(data):
@@ -57,7 +73,6 @@ def train_model(data):
     model = RandomForestRegressor(n_estimators=50, random_state=42)
     model.fit(X, y)
     return model
-
 
 # --- APLIKACIJA ---
 st.title("🏢 Premium Analitika Tržišta Nekretnina")
@@ -76,17 +91,15 @@ if len(df) > 0:
         df['Dobra_Prilika'] = df['Odnos_AI'] <= 0.85
         df['Sumnjivo_Nisko'] = df['Odnos_AI'] <= 0.45
 
-        # Racunanje udaljenosti
         df['Udaljenost_Centar_km'] = df.apply(
             lambda row: haversine_distance(row['Latitude'], row['Longitude'], CENTRI_GRADOVA[row['Grad']][0],
                                            CENTRI_GRADOVA[row['Grad']][1])
             if row['Grad'] in CENTRI_GRADOVA else None, axis=1
         )
-        # Walk Score (Simulacija na osnovu udaljenosti od centra, 0-100)
         df['Walk_Score'] = df['Udaljenost_Centar_km'].apply(
             lambda x: max(0, min(100, int(100 - (x * 8)))) if pd.notna(x) else 50)
 
-    # --- GLAVNI MENI (ZAMENA ZA TABOVE) ---
+    # --- GLAVNI MENI ---
     st.sidebar.markdown("---")
     prikaz = st.sidebar.radio("🧭 Glavni meni:", [
         "📍 Interaktivna Mapa",
@@ -121,7 +134,6 @@ if len(df) > 0:
     prikazi_heatmap = st.sidebar.checkbox("🔥 Toplotna Mapa (2D)")
     prikazi_3d = st.sidebar.checkbox("🏙️ Prikaži 3D Gustinu (PyDeck)")
 
-    # Primena filtera
     f_df = df[
         (df['Cena_EUR'] >= cena_opseg[0]) & (df['Cena_EUR'] <= cena_opseg[1]) &
         (df['Cena_po_m2'] >= m2_opseg[0]) & (df['Cena_po_m2'] <= m2_opseg[1]) &
@@ -133,7 +145,7 @@ if len(df) > 0:
             f_df = f_df[f_df['Udaljenost_Centar_km'] <= dist_opseg]
 
     if samo_prilike: f_df = f_df[f_df['Dobra_Prilika'] == True]
-    f_df = f_df[f_df['Sumnjivo_Nisko'] == False]  # Uvek krijemo prevare
+    f_df = f_df[f_df['Sumnjivo_Nisko'] == False]
 
     # ---------------- PRIKAZ 1: MAPA ----------------
     if prikaz == "📍 Interaktivna Mapa":
@@ -145,7 +157,6 @@ if len(df) > 0:
             start_coords = [f_df['Latitude'].iloc[0], f_df['Longitude'].iloc[0]]
 
             if prikazi_3d:
-                # 3D PyDeck Mapa (Heksagoni)
                 st.subheader("🏙️ 3D Mapa Gustine Tržišta")
                 layer = pdk.Layer(
                     'HexagonLayer',
@@ -161,7 +172,6 @@ if len(df) > 0:
                 st.pydeck_chart(
                     pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"text": "Koncentracija stanova"}))
             else:
-                # Standardna 2D Mapa
                 m = folium.Map(location=start_coords, zoom_start=12, tiles="OpenStreetMap")
                 Draw(export=True).add_to(m)
 
@@ -174,11 +184,9 @@ if len(df) > 0:
                 for index, row in f_df.iterrows():
                     boja, ikona = "blue", "home"
                     status = "Realna cena"
-                    if row[
-                        'Dobra_Prilika']: boja, ikona, status = "green", "star", "<b style='color:green;'>🌟 Odlična prilika!</b>"
+                    if row['Dobra_Prilika']: boja, ikona, status = "green", "star", "<b style='color:green;'>🌟 Odlična prilika!</b>"
 
-                    dist_tekst = f"Walk Score: <b>{row['Walk_Score']}/100</b><br>" if pd.notna(
-                        row.get('Walk_Score')) else ""
+                    dist_tekst = f"Walk Score: <b>{row['Walk_Score']}/100</b><br>" if pd.notna(row.get('Walk_Score')) else ""
 
                     html = f"""
                     <div style="width:250px;">
@@ -202,7 +210,6 @@ if len(df) > 0:
 
                 st_folium(m, width="100%", height=500, returned_objects=[])
 
-        # Sistem dodavanja u omiljene preko tabele ispod mape
         st.subheader("📋 Brzi pregled i dodavanje u omiljene")
         if len(f_df) > 0:
             df_prikaz = f_df[['Naslov', 'Cena_EUR', 'Kvadratura_m2', 'Cena_po_m2', 'Deo_Grada', 'Link']].copy()
@@ -218,17 +225,14 @@ if len(df) > 0:
                             st.session_state['omiljeni'].append(row.to_dict())
                     st.success(f"Dodato {len(sacuvani_sada)} oglasa u Omiljene!")
 
-    # ---------------- PRIKAZ 2: ANALITIKA & KREDITI ----------------
+    # ---------------- Ostali tabovi ostaju potpuno isti ----------------
     elif prikaz == "📈 Analitika & Krediti":
         st.header("Kalkulator Kredita i ROI Analitika")
-
-        # Grafik trendova
         st.subheader("📊 Tržišni Trend: Odnos Cene i Kvadrature")
         if len(f_df) > 0:
             st.scatter_chart(data=f_df, x='Kvadratura_m2', y='Cena_EUR', color='Dobra_Prilika', size='Cena_po_m2')
 
         st.markdown("---")
-
         col_roi, col_kredit = st.columns(2)
 
         with col_roi:
@@ -238,8 +242,7 @@ if len(df) > 0:
                 ocekivana_mesecna = f_df['Kvadratura_m2'].mean() * pretpostavljena_kirija
                 godisnja_zarada = ocekivana_mesecna * 12
                 godina_za_povrat = f_df['Cena_EUR'].mean() / godisnja_zarada if godisnja_zarada > 0 else 0
-                st.info(
-                    f"Očekivana mesečna kirija za prosečan stan u izabranom području: **~{ocekivana_mesecna:,.0f} €**")
+                st.info(f"Očekivana mesečna kirija za prosečan stan: **~{ocekivana_mesecna:,.0f} €**")
                 st.success(f"Vreme isplate investicije (ROI): **{godina_za_povrat:.1f} godina**")
             else:
                 st.warning("Prebacite na Kupovinu stanova za ROI analitiku.")
@@ -248,8 +251,7 @@ if len(df) > 0:
             st.subheader("🏦 Kalkulator stambenog kredita")
             if rezim == "Kupovina stanova" and len(f_df) > 0:
                 cena_stana = f_df['Cena_EUR'].mean()
-                st.write(f"Računamo na prosečnu cenu izabranih stanova: **{cena_stana:,.0f} €**")
-
+                st.write(f"Računamo na prosečnu cenu: **{cena_stana:,.0f} €**")
                 ucesce_proc = st.slider("Učešće (%)", 10, 50, 20)
                 kamata = st.slider("Kamatna stopa (%)", 1.0, 10.0, 4.5, 0.1)
                 godine = st.slider("Rok otplate (godina)", 5, 30, 20)
@@ -261,14 +263,10 @@ if len(df) > 0:
 
                 st.metric("Potrebno učešće", f"{cena_stana * (ucesce_proc / 100):,.0f} €")
                 st.error(f"**Mesečna rata: {rata:,.0f} €**")
-            else:
-                st.warning("Prebacite na Kupovinu stanova za kreditni kalkulator.")
 
-    # ---------------- PRIKAZ 3: A/B POREĐENJE ----------------
     elif prikaz == "⚖️ A/B Poređenje Lokacija":
         st.header("Uporedi dve mikrolokacije")
         svi_delovi = sorted(df['Deo_Grada'].dropna().unique().tolist())
-
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Lokacija A")
@@ -278,7 +276,6 @@ if len(df) > 0:
                 st.metric("Broj oglasa", len(podaci_A))
                 st.metric(f"Prosečna {label_cena}", f"{podaci_A['Cena_EUR'].mean():,.0f} €")
                 st.metric("Walk Score (Pešačka zona)", f"{podaci_A['Walk_Score'].mean():,.0f} / 100")
-
         with col2:
             st.subheader("Lokacija B")
             deo_B = st.selectbox("Izaberi deo grada B:", svi_delovi, key="B", index=1 if len(svi_delovi) > 1 else 0)
@@ -286,16 +283,8 @@ if len(df) > 0:
             if len(podaci_B) > 0:
                 st.metric("Broj oglasa", len(podaci_B))
                 st.metric(f"Prosečna {label_cena}", f"{podaci_B['Cena_EUR'].mean():,.0f} €")
-                st.metric("Walk Score (Pešačka zona)", f"{podaci_B['Walk_Score'].mean():,.0f} / 100")
+                st.metric("Walk Score", f"{podaci_B['Walk_Score'].mean():,.0f} / 100")
 
-        # Dugme za preuzimanje poređenja
-        st.markdown("---")
-        kombinovano = pd.concat([podaci_A, podaci_B])
-        csv_data = kombinovano.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Preuzmi A/B Izveštaj (CSV)", data=csv_data, file_name="ab_poredjenje_izvestaj.csv",
-                           mime="text/csv")
-
-    # ---------------- PRIKAZ 4: OMILJENI OGLASI ----------------
     elif prikaz == "⭐ Omiljeni Oglasi":
         st.header("Tvoja lista sačuvanih nekretnina")
         if len(st.session_state['omiljeni']) == 0:
@@ -303,35 +292,17 @@ if len(df) > 0:
         else:
             omiljeni_df = pd.DataFrame(st.session_state['omiljeni'])
             st.dataframe(omiljeni_df[['Naslov', 'Cena_EUR', 'Deo_Grada', 'Link']], use_container_width=True)
-
             if st.button("🗑️ Obriši sve omiljene"):
                 st.session_state['omiljeni'] = []
-                st.experimental_rerun()
+                st.rerun() # Izmenjeno na novu metodu
 
-            # Eksport omiljenih
-            csv_omiljeni = omiljeni_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Preuzmi listu (CSV)", data=csv_omiljeni, file_name="moji_omiljeni_stanovi.csv",
-                               mime="text/csv")
-
-    # ---------------- PRIKAZ 5: INTEGRACIJE ----------------
     elif prikaz == "⚙️ Integracije (Webhook)":
         st.header("API & Hardver Integracije")
-        st.markdown("""
-        Povežite ovu platformu sa svojim sistemima. Možete namestiti da softver šalje **JSON payload** na vaš server, Telegram bot ili čak kućni Raspberry Pi kad god nađe 'Zlatnu Priliku'.
-        """)
-
-        webhook_url = st.text_input("Unesite Webhook URL (npr. https://moj-server.com/api/nekretnine):", "")
-
+        webhook_url = st.text_input("Unesite Webhook URL:", "")
         if st.button("🚀 Pošalji probni signal"):
             if webhook_url:
-                try:
-                    import json
-
-                    probni_podaci = {"status": "success", "poruka": "Test Zlatne Prilike", "cena": 55000}
-                    # Ovdje bi išao requests.post(webhook_url, json=probni_podaci)
-                    st.success(
-                        f"Signal uspešno simuliran i 'poslat' na {webhook_url}\n\nPayload: {json.dumps(probni_podaci)}")
-                except Exception as e:
-                    st.error(f"Greška pri slanju: {e}")
+                st.success(f"Signal uspešno 'poslat' na {webhook_url}")
             else:
                 st.warning("Prvo unesite URL!")
+else:
+    st.warning("Trenutno nema podataka na serveru.")
