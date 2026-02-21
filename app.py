@@ -55,7 +55,7 @@ def load_data(rezim_rada):
                 if len(podaci) > 0:
                     df = pd.DataFrame(podaci)
                     
-                    # Prevodimo kolone sa C# na tvoj Python kod
+                    # Prevodimo kolone sa C# na Python format
                     mapiranje = {
                         'grad': 'Grad', 'deoGrada': 'Deo_Grada', 'ulica': 'Ulica',
                         'cenaEur': 'Cena_EUR', 'kvadraturaM2': 'Kvadratura_m2', 
@@ -64,12 +64,10 @@ def load_data(rezim_rada):
                     }
                     df = df.rename(columns=mapiranje)
                     
-                    # Osiguravamo da su koordinate brojevi (da mapa ne pukne)
+                    # Osiguravamo da su koordinate brojevi
                     df['Latitude'] = pd.to_numeric(df['Latitude'], errors='coerce')
                     df['Longitude'] = pd.to_numeric(df['Longitude'], errors='coerce')
                     
-                    # Ne brišemo prazne koordinate još uvek, da bismo videli podatke!
-                    # df = df.dropna(subset=['Latitude', 'Longitude', 'Cena_EUR', 'Kvadratura_m2'])
                     return df
         return pd.DataFrame()
     except Exception as e:
@@ -78,7 +76,6 @@ def load_data(rezim_rada):
 
 @st.cache_resource
 def train_model(data):
-    # Proveravamo da li imamo dovoljno ispravnih podataka za ML
     valid_data = data.dropna(subset=['Kvadratura_m2', 'Latitude', 'Longitude', 'Cena_EUR'])
     if len(valid_data) == 0: return None
     
@@ -89,7 +86,7 @@ def train_model(data):
     return model
 
 # --- APLIKACIJA ---
-st.title("🏢 Premium Analitika Tržišta Nekretnina")
+st.title("Analitika Tržišta Nekretnina")
 
 # SIDEBAR: REŽIM I FILTERI
 st.sidebar.header("⚙️ Podešavanja")
@@ -100,8 +97,8 @@ if len(df) > 0:
     with st.spinner('Učitavam AI algoritam i mapiram lokacije...'):
         model = train_model(df)
         
-        # AI Procena (samo za redove koji imaju koordinate)
-        df['Predvidjena_Cena'] = df['Cena_EUR'] # Default
+        # AI Procena
+        df['Predvidjena_Cena'] = df['Cena_EUR'] 
         if model is not None:
             mask = df['Latitude'].notna() & df['Longitude'].notna()
             if mask.any():
@@ -172,22 +169,32 @@ if len(df) > 0:
     if samo_prilike: f_df = f_df[f_df['Dobra_Prilika'] == True]
     f_df = f_df[f_df['Sumnjivo_Nisko'] == False]
 
-    # Zadržavamo samo redove sa validnim koordinatama za mapu
     map_df = f_df.dropna(subset=['Latitude', 'Longitude'])
 
     # ---------------- PRIKAZ 1: MAPA ----------------
     if prikaz == "📍 Interaktivna Mapa":
         st.header("Geoprostorna analiza")
-        st.markdown(f"**Prikazujem {len(f_df)} oglasa.** Prosečna {label_cena.lower()}: **{f_df['Cena_EUR'].mean():,.0f} €**")
+        
+        # Prikazujemo ukupne statistike na osnovu SVIH filtriranih
+        st.markdown(f"**Pronađeno ukupno {len(f_df)} oglasa.** Prosečna {label_cena.lower()}: **{f_df['Cena_EUR'].mean():,.0f} €**")
 
         if len(map_df) > 0:
-            start_coords = [map_df['Latitude'].iloc[0], map_df['Longitude'].iloc[0]]
+            
+            # --- DODATO ZA BRZINU: Ograničavamo na 1000 ---
+            if len(map_df) > 1000:
+                prikaz_df = map_df.head(1000)
+                st.info(f"⚡ Radi brzine učitavanja, na mapi je prikazano prvih 1000 od ukupno {len(map_df)} oglasa. Svi podaci o stanovima i analitika su tu, koristi filtere sa leve strane da suziš pretragu!")
+            else:
+                prikaz_df = map_df
+            # -----------------------------------------------
+
+            start_coords = [prikaz_df['Latitude'].iloc[0], prikaz_df['Longitude'].iloc[0]]
 
             if prikazi_3d:
                 st.subheader("🏙️ 3D Mapa Gustine Tržišta")
                 layer = pdk.Layer(
                     'HexagonLayer',
-                    data=map_df,
+                    data=prikaz_df,
                     get_position='[Longitude, Latitude]',
                     radius=200,
                     elevation_scale=10,
@@ -202,12 +209,12 @@ if len(df) > 0:
                 Draw(export=True).add_to(m)
 
                 if prikazi_heatmap:
-                    heat_data = [[r['Latitude'], r['Longitude'], r['Cena_po_m2']] for i, r in map_df.iterrows()]
+                    heat_data = [[r['Latitude'], r['Longitude'], r['Cena_po_m2']] for i, r in prikaz_df.iterrows()]
                     HeatMap(heat_data, radius=15).add_to(m)
 
                 marker_cluster = MarkerCluster().add_to(m)
 
-                for index, row in map_df.iterrows():
+                for index, row in prikaz_df.iterrows():
                     boja, ikona = "blue", "home"
                     status = "Realna cena"
                     if row['Dobra_Prilika']: boja, ikona, status = "green", "star", "<b style='color:green;'>🌟 Odlična prilika!</b>"
