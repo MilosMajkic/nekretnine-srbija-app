@@ -58,7 +58,7 @@ def load_local_data(mode):
         st.error(f"Error loading CSV: {e}")
         return pd.DataFrame()
 
-    # Mapping prema TVOJIM stvarnim header-ima
+    # Mapping prema tvojim header-ima
     expected_cols = {
         'Grad': 'City',
         'Deo_Grada': 'District',
@@ -71,39 +71,20 @@ def load_local_data(mode):
         'Cena_EUR': 'Price_EUR',
         'Kvadratura_m2': 'Area_m2',
         'Cena_po_m2': 'Price_per_m2',
-        # Izdavanje (preusmeravamo na iste nazive)
+        # Izdavanje
         'Kirija_EUR': 'Price_EUR',
         'Kirija_po_m2': 'Price_per_m2',
         # opciono
         'Lokacija_Osnovna': 'Location_Basic',
     }
 
-    # Rename samo postojeće kolone
     rename_dict = {k: v for k, v in expected_cols.items() if k in df.columns}
     df = df.rename(columns=rename_dict)
 
-    # Pretvaramo u numeric
     numeric_cols = ['Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # ──────────────── DEBUG INFO ────────────────
-    st.subheader("CSV Debug Info (možeš kasnije da obrišeš)")
-    st.write("**Kolone nakon učitavanja i preimenovanja:**")
-    st.write(df.columns.tolist())
-
-    core_expected = {'City', 'District', 'Street', 'Title', 'Link', 'Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2'}
-    missing = core_expected - set(df.columns)
-    if missing:
-        st.warning(f"Nedostaju važne kolone: {', '.join(missing)}")
-    else:
-        st.success("Sve ključne kolone su prisutne ✓")
-
-    if len(df) > 0:
-        st.write("**Prva 3 reda (primer):**")
-        st.dataframe(df.head(3))
-    # ────────────────────────────────────────────
 
     return df
 
