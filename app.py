@@ -264,7 +264,12 @@ if view == "Interactive Map":
             view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=50)
             st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state))
         else:
-            m = folium.Map(location=[center_lat, center_lon], zoom_start=12, tiles="CartoDB positron")
+            m = folium.Map(
+                location=[center_lat, center_lon],
+                zoom_start=12,
+                tiles="OpenStreetMap",  # Changed to reliable tiles
+                attr="© OpenStreetMap contributors"
+            )
             Draw(export=True).add_to(m)
 
             if show_heatmap:
@@ -273,7 +278,6 @@ if view == "Interactive Map":
 
             marker_cluster = MarkerCluster().add_to(m)
             for _, row in display_df.iterrows():
-                # Original colors restored
                 color = "green" if row.get('Good_Deal', False) else "blue"
                 icon_name = "star" if row.get('Good_Deal', False) else "home"
                 status_text = "<b style='color:green;'>Great Deal!</b>" if row.get('Good_Deal', False) else "Fair price"
@@ -297,7 +301,13 @@ if view == "Interactive Map":
                     icon=folium.Icon(color=color, icon=icon_name, prefix="fa")
                 ).add_to(marker_cluster)
 
-            st_folium(m, width="100%", height=600)
+            st_folium(
+                m,
+                width="100%",
+                height=600,
+                key="real_estate_map",           # Prevents reload loop
+                returned_objects=[]              # Reduces overhead
+            )
 
         # Quick view table + favorites
         st.subheader("Quick view + add to favorites")
