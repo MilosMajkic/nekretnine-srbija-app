@@ -52,48 +52,56 @@ def load_local_data(mode):
     try:
         df = pd.read_csv(file_path, low_memory=False)
     except FileNotFoundError:
-        st.error(f"File **{file_path}** not found in the application folder.")
+        st.error(f"File **{file_path}** not found.")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading CSV: {e}")
         return pd.DataFrame()
 
-    # Expected column mapping (Serbian → English)
+    # Mapping prema TVOJIM stvarnim header-ima
     expected_cols = {
-        'grad': 'City',
-        'deoGrada': 'District',
-        'ulica': 'Street',
-        'cenaEur': 'Price_EUR',
-        'kvadraturaM2': 'Area_m2',
-        'cenaPoM2': 'Price_per_m2',
-        'naslov': 'Title',
-        'link': 'Link',
-        'latitude': 'Latitude',
-        'longitude': 'Longitude'
+        'Grad': 'City',
+        'Deo_Grada': 'District',
+        'Ulica': 'Street',
+        'Naslov': 'Title',
+        'Link': 'Link',
+        'Latitude': 'Latitude',
+        'Longitude': 'Longitude',
+        # Kupovina
+        'Cena_EUR': 'Price_EUR',
+        'Kvadratura_m2': 'Area_m2',
+        'Cena_po_m2': 'Price_per_m2',
+        # Izdavanje (preusmeravamo na iste nazive)
+        'Kirija_EUR': 'Price_EUR',
+        'Kirija_po_m2': 'Price_per_m2',
+        # opciono
+        'Lokacija_Osnovna': 'Location_Basic',
     }
 
-    # Only rename columns that actually exist
+    # Rename samo postojeće kolone
     rename_dict = {k: v for k, v in expected_cols.items() if k in df.columns}
     df = df.rename(columns=rename_dict)
 
-    # Convert to numeric where needed
+    # Pretvaramo u numeric
     numeric_cols = ['Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # ──────────────── DEBUG INFO ────────────────
-    st.subheader("CSV Debug Info (remove in production if you want)")
-    st.write("**Columns present after loading & renaming:**")
+    st.subheader("CSV Debug Info (možeš kasnije da obrišeš)")
+    st.write("**Kolone nakon učitavanja i preimenovanja:**")
     st.write(df.columns.tolist())
 
-    missing_expected = [v for v in expected_cols.values() if v not in df.columns]
-    if missing_expected:
-        st.warning(f"These expected columns are **missing**: {', '.join(missing_expected)}")
-        st.info("Check your CSV file headers. They must match one of: " + ", ".join(expected_cols.keys()))
+    core_expected = {'City', 'District', 'Street', 'Title', 'Link', 'Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2'}
+    missing = core_expected - set(df.columns)
+    if missing:
+        st.warning(f"Nedostaju važne kolone: {', '.join(missing)}")
+    else:
+        st.success("Sve ključne kolone su prisutne ✓")
 
     if len(df) > 0:
-        st.write("**First 3 rows (sample):**")
+        st.write("**Prva 3 reda (primer):**")
         st.dataframe(df.head(3))
     # ────────────────────────────────────────────
 
@@ -107,14 +115,14 @@ def train_model(data):
 
     missing = required - available
     if missing:
-        st.error(f"Cannot train price prediction model — missing columns: {', '.join(missing)}")
+        st.error(f"Ne može da se trenira model — nedostaju kolone: {', '.join(missing)}")
         return None
 
     subset_df = data[list(required)]
     valid_data = subset_df.dropna()
 
     if len(valid_data) < 10:
-        st.warning("Too few complete rows with Area, Lat, Lon and Price (< 10). Model not trained.")
+        st.warning("Premalo kompletnih redova sa površinom, koordinatama i cenom (< 10). Model nije treniran.")
         return None
 
     X = valid_data[['Area_m2', 'Latitude', 'Longitude']]
@@ -130,26 +138,25 @@ def train_model(data):
 
 
 # ────────────────────────────────────────────────
-# MAIN APPLICATION
+# GLAVNI DEO APLIKACIJE
 # ────────────────────────────────────────────────
 st.title("Real Estate Market Analytics (Local CSV)")
 
 # ── SIDEBAR ──
-st.sidebar.header("Settings")
-mode = st.sidebar.radio("Market:", ["Buy Apartments", "Rent Apartments"])
+st.sidebar.header("Podešavanja")
+mode = st.sidebar.radio("Tržište:", ["Buy Apartments", "Rent Apartments"])
 
-with st.spinner("Loading local data..."):
+with st.spinner("Učitavam podatke..."):
     df = load_local_data(mode)
 
 if df.empty:
-    st.error("No data loaded. Check file existence and format.")
+    st.error("Nema podataka. Proveri da li fajl postoji i ima li ispravne kolone.")
     st.stop()
 
-with st.spinner("Preparing data, training model and calculating features..."):
+with st.spinner("Pripremam podatke, treniram model i računam dodatne kolone..."):
     model = train_model(df)
 
-    # Default: predicted = actual (if no model)
-    df['Predicted_Price'] = df['Price_EUR']
+    df['Predicted_Price'] = df.get('Price_EUR', pd.Series(np.nan, index=df.index))
 
     if model is not None:
         mask = df[['Latitude', 'Longitude', 'Area_m2']].notna().all(axis=1)
@@ -174,22 +181,22 @@ with st.spinner("Preparing data, training model and calculating features..."):
         lambda x: max(0, min(100, int(100 - (x or 0) * 8))) if pd.notna(x) else 50
     )
 
-# ── SIDEBAR FILTERS ──
+# ── FILTERI U SIDEBAR-U ──
 st.sidebar.markdown("---")
-view = st.sidebar.radio("Main Menu:", [
-    "Interactive Map",
-    "Analytics & Mortgage",
-    "Location A/B Comparison",
-    "Favorites"
+view = st.sidebar.radio("Glavni meni:", [
+    "Interaktivna mapa",
+    "Analitika & Kredit",
+    "Poređenje lokacija A/B",
+    "Omiljeni"
 ])
 
 st.sidebar.markdown("---")
-st.sidebar.header("Filters")
+st.sidebar.header("Filteri")
 
-cities = ["All"] + sorted(df['City'].dropna().unique().tolist())
-selected_city = st.sidebar.selectbox("City:", cities)
+cities = ["Sve"] + sorted(df['City'].dropna().unique().tolist())
+selected_city = st.sidebar.selectbox("Grad:", cities)
 
-price_label = "Price (EUR)" if mode == "Buy Apartments" else "Monthly Rent (EUR)"
+price_label = "Cena (EUR)" if mode == "Buy Apartments" else "Kirija mesečno (EUR)"
 max_price_default = 300000 if mode == "Buy Apartments" else 2000
 
 price_range = st.sidebar.slider(
@@ -200,37 +207,37 @@ price_range = st.sidebar.slider(
 )
 
 price_m2_range = st.sidebar.slider(
-    "Price per m² (EUR):",
+    "Cena po m² (EUR):",
     int(df['Price_per_m2'].min(skipna=True) or 0),
     int(df['Price_per_m2'].max(skipna=True) or 5000),
     (int(df['Price_per_m2'].min(skipna=True) or 0), int(df['Price_per_m2'].max(skipna=True) or 5000))
 )
 
 area_range = st.sidebar.slider(
-    "Area (m²):",
+    "Površina (m²):",
     int(df['Area_m2'].min(skipna=True) or 10),
     int(df['Area_m2'].max(skipna=True) or 200),
     (int(df['Area_m2'].min(skipna=True) or 10), int(df['Area_m2'].max(skipna=True) or 200))
 )
 
-if selected_city in CITY_CENTERS:
+if selected_city in CITY_CENTERS and selected_city != "Sve":
     max_dist = math.ceil(df[df['City'] == selected_city]['Distance_to_Center_km'].max() or 20)
-    distance_range = st.sidebar.slider("Distance from center (km):", 0, max_dist, max_dist)
+    distance_range = st.sidebar.slider("Udaljenost od centra (km):", 0, max_dist, max_dist)
 else:
     distance_range = 999
 
-only_good_deals = st.sidebar.checkbox("Show only 'Great Deals'")
-show_heatmap = st.sidebar.checkbox("Show Heatmap")
-show_3d = st.sidebar.checkbox("Show 3D Density (PyDeck)")
+only_good_deals = st.sidebar.checkbox("Prikaži samo 'Odlične ponude'")
+show_heatmap = st.sidebar.checkbox("Prikaži heatmap")
+show_3d = st.sidebar.checkbox("Prikaži 3D gustinu (PyDeck)")
 
-# ── FILTERING ──
+# ── FILTRIRANJE ──
 filtered_df = df[
     (df['Price_EUR'] >= price_range[0]) & (df['Price_EUR'] <= price_range[1]) &
     (df['Price_per_m2'] >= price_m2_range[0]) & (df['Price_per_m2'] <= price_m2_range[1]) &
     (df['Area_m2'] >= area_range[0]) & (df['Area_m2'] <= area_range[1])
 ]
 
-if selected_city != "All":
+if selected_city != "Sve":
     filtered_df = filtered_df[filtered_df['City'] == selected_city]
     if selected_city in CITY_CENTERS:
         filtered_df = filtered_df[filtered_df['Distance_to_Center_km'] <= distance_range]
@@ -243,19 +250,18 @@ filtered_df = filtered_df[~filtered_df['Suspiciously_Low']]
 map_df = filtered_df.dropna(subset=['Latitude', 'Longitude'])
 
 # ────────────────────────────────────────────────
-# VIEW SELECTION
+# PRIKAZ PO IZABRANOM VIEW-U
 # ────────────────────────────────────────────────
-if view == "Interactive Map":
-    st.header("Geospatial Analysis")
-    st.markdown(f"**Found {len(filtered_df):,} listings**   Average {price_label.lower()}: **{filtered_df['Price_EUR'].mean():,.0f} €**")
+if view == "Interaktivna mapa":
+    st.header("Geoprostorna analiza")
+    st.markdown(f"**Pronađeno {len(filtered_df):,} oglasa**   Prosečna {price_label.lower()}: **{filtered_df['Price_EUR'].mean():,.0f} €**")
 
     if len(map_df) == 0:
-        st.warning("No listings with valid coordinates after filtering.")
+        st.warning("Nema oglasa sa validnim koordinatama nakon filtriranja.")
     else:
-        # Limit markers for performance
         if len(map_df) > 1000:
             display_df = map_df.sample(n=1000, random_state=42)
-            st.info(f"Displaying **1000** random listings out of {len(map_df):,} (performance reasons).")
+            st.info(f"Prikazujem **1000** slučajnih oglasa od {len(map_df):,} (zbog performansi).")
         else:
             display_df = map_df
 
@@ -263,7 +269,7 @@ if view == "Interactive Map":
         center_lon = display_df['Longitude'].median()
 
         if show_3d:
-            st.subheader("3D Hexagon Density")
+            st.subheader("3D Hexagon gustina")
             layer = pdk.Layer(
                 'HexagonLayer',
                 data=display_df,
@@ -281,25 +287,25 @@ if view == "Interactive Map":
             Draw(export=True).add_to(m)
 
             if show_heatmap:
-                heat_data = [[r['Latitude'], r['Longitude'], r['Price_per_m2']] for _, r in display_df.iterrows()]
+                heat_data = [[r['Latitude'], r['Longitude'], r.get('Price_per_m2', 0)] for _, r in display_df.iterrows()]
                 HeatMap(heat_data, radius=14, blur=20).add_to(m)
 
             marker_cluster = MarkerCluster().add_to(m)
             for _, row in display_df.iterrows():
-                color = "green" if row['Good_Deal'] else "blue"
-                icon_name = "star" if row['Good_Deal'] else "home"
-                status_text = "<b style='color:green;'>Great Deal!</b>" if row['Good_Deal'] else "Fair price"
+                color = "green" if row.get('Good_Deal', False) else "blue"
+                icon_name = "star" if row.get('Good_Deal', False) else "home"
+                status_text = "<b style='color:green;'>Odlična ponuda!</b>" if row.get('Good_Deal', False) else "Realna cena"
 
                 popup_html = f"""
                 <div style="width:260px; font-size:13px;">
-                    <b>{row.get('Title', 'No title')}</b><br>
+                    <b>{row.get('Title', 'Bez naslova')}</b><br>
                     <small>{row.get('Street', '')} • {row.get('District', '')}</small><hr>
-                    <b>Price:</b> {row['Price_EUR']:,.0f} €<br>
-                    <b>{row['Area_m2']}</b> m²  •  <b>{row.get('Price_per_m2', '–'):,.0f} €/m²</b><br>
+                    <b>Cena:</b> {row.get('Price_EUR', '–'):,.0f} €<br>
+                    <b>{row.get('Area_m2', '–')}</b> m²  •  <b>{row.get('Price_per_m2', '–'):,.0f} €/m²</b><br>
                     Walk Score: <b>{row.get('Walk_Score', 50)}</b>/100<br>
-                    <small>AI estimate ≈ {row['Predicted_Price']:,.0f} €</small><br>
+                    <small>AI procena ≈ {row.get('Predicted_Price', '–'):,.0f} €</small><br>
                     {status_text}<br>
-                    <a href="{row.get('Link', '#')}" target="_blank" style="display:block; margin-top:8px; background:#0066cc; color:white; text-align:center; padding:6px; border-radius:4px; text-decoration:none;">Open listing</a>
+                    <a href="{row.get('Link', '#')}" target="_blank" style="display:block; margin-top:8px; background:#0066cc; color:white; text-align:center; padding:6px; border-radius:4px; text-decoration:none;">Otvori oglas</a>
                 </div>
                 """
 
@@ -311,41 +317,42 @@ if view == "Interactive Map":
 
             st_folium(m, width="100%", height=600)
 
-        # Quick view table + favorites
-        st.subheader("Quick view + add to favorites")
+        # Tabela za brzi pregled + favorites
+        st.subheader("Brzi pregled + dodaj u omiljene")
         cols_to_show = ['Title', 'Price_EUR', 'Area_m2', 'Price_per_m2', 'District', 'Link']
         display_table = filtered_df[[c for c in cols_to_show if c in filtered_df.columns]].copy()
-        display_table.insert(0, "Save", False)
+        display_table.insert(0, "Sačuvaj", False)
 
         edited_df = st.data_editor(
             display_table,
-            column_config={"Save": st.column_config.CheckboxColumn(required=True)},
+            column_config={"Sačuvaj": st.column_config.CheckboxColumn(required=True)},
             hide_index=True,
             use_container_width=True,
             num_rows="dynamic"
         )
 
-        if st.button("Save selected to Favorites"):
-            new_items = edited_df[edited_df["Save"]].drop(columns="Save").to_dict("records")
+        if st.button("Sačuvaj označene u Omiljene"):
+            new_items = edited_df[edited_df["Sačuvaj"]].drop(columns="Sačuvaj").to_dict("records")
             added_count = 0
-            existing_links = {x['Link'] for x in st.session_state['favorites'] if 'Link' in x}
+            existing_links = {x.get('Link') for x in st.session_state['favorites'] if x.get('Link')}
             for item in new_items:
-                if item.get('Link') and item['Link'] not in existing_links:
+                link = item.get('Link')
+                if link and link not in existing_links:
                     st.session_state['favorites'].append(item)
                     added_count += 1
             if added_count > 0:
-                st.success(f"Added **{added_count}** new listings to favorites!")
+                st.success(f"Dodato **{added_count}** novih oglasa u omiljene!")
             else:
-                st.info("No new items added (already in favorites or no link).")
+                st.info("Ništa novo nije dodato (već postoje ili nema linka).")
 
-elif view == "Analytics & Mortgage":
-    st.info("Analytics & Mortgage section – to be implemented")
+elif view == "Analitika & Kredit":
+    st.info("Sekcija Analitika i kredit – još uvek nije implementirana")
 
-elif view == "Location A/B Comparison":
-    st.info("Location A/B Comparison – to be implemented")
+elif view == "Poređenje lokacija A/B":
+    st.info("Poređenje lokacija A/B – još uvek nije implementirano")
 
-elif view == "Favorites":
-    st.info("Favorites view – to be implemented")
+elif view == "Omiljeni":
+    st.info("Prikaz omiljenih oglasa – još uvek nije implementirano")
 
 else:
-    st.info("Select a view from the menu on the left.")
+    st.info("Izaberi prikaz sa leve strane.")
