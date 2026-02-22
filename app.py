@@ -51,49 +51,80 @@ def load_local_data(mode):
 
     try:
         df = pd.read_csv(file_path, low_memory=False)
-
-        # Expected column name mapping – adjust if your CSV uses different names
-        expected_cols = {
-            'grad': 'City',
-            'deoGrada': 'District',
-            'ulica': 'Street',
-            'cenaEur': 'Price_EUR',
-            'kvadraturaM2': 'Area_m2',
-            'cenaPoM2': 'Price_per_m2',
-            'naslov': 'Title',
-            'link': 'Link',
-            'latitude': 'Latitude',
-            'longitude': 'Longitude'
-        }
-
-        # Rename only columns that exist
-        rename_dict = {k: v for k, v in expected_cols.items() if k in df.columns}
-        df = df.rename(columns=rename_dict)
-
-        # Ensure numeric columns
-        for col in ['Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        return df
-
     except FileNotFoundError:
         st.error(f"File **{file_path}** not found in the application folder.")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error loading file: {e}")
+        st.error(f"Error loading CSV: {e}")
         return pd.DataFrame()
+
+    # Expected column mapping (Serbian → English)
+    expected_cols = {
+        'grad': 'City',
+        'deoGrada': 'District',
+        'ulica': 'Street',
+        'cenaEur': 'Price_EUR',
+        'kvadraturaM2': 'Area_m2',
+        'cenaPoM2': 'Price_per_m2',
+        'naslov': 'Title',
+        'link': 'Link',
+        'latitude': 'Latitude',
+        'longitude': 'Longitude'
+    }
+
+    # Only rename columns that actually exist
+    rename_dict = {k: v for k, v in expected_cols.items() if k in df.columns}
+    df = df.rename(columns=rename_dict)
+
+    # Convert to numeric where needed
+    numeric_cols = ['Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # ──────────────── DEBUG INFO ────────────────
+    st.subheader("CSV Debug Info (remove in production if you want)")
+    st.write("**Columns present after loading & renaming:**")
+    st.write(df.columns.tolist())
+
+    missing_expected = [v for v in expected_cols.values() if v not in df.columns]
+    if missing_expected:
+        st.warning(f"These expected columns are **missing**: {', '.join(missing_expected)}")
+        st.info("Check your CSV file headers. They must match one of: " + ", ".join(expected_cols.keys()))
+
+    if len(df) > 0:
+        st.write("**First 3 rows (sample):**")
+        st.dataframe(df.head(3))
+    # ────────────────────────────────────────────
+
+    return df
 
 
 @st.cache_resource
 def train_model(data):
-    valid_data = data.dropna(subset=['Area_m2', 'Latitude', 'Longitude', 'Price_EUR'])
+    required = {'Area_m2', 'Latitude', 'Longitude', 'Price_EUR'}
+    available = set(data.columns)
+
+    missing = required - available
+    if missing:
+        st.error(f"Cannot train price prediction model — missing columns: {', '.join(missing)}")
+        return None
+
+    subset_df = data[list(required)]
+    valid_data = subset_df.dropna()
+
     if len(valid_data) < 10:
+        st.warning("Too few complete rows with Area, Lat, Lon and Price (< 10). Model not trained.")
         return None
 
     X = valid_data[['Area_m2', 'Latitude', 'Longitude']]
     y = valid_data['Price_EUR']
-    model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
+
+    model = RandomForestRegressor(
+        n_estimators=50,
+        random_state=42,
+        n_jobs=-1
+    )
     model.fit(X, y)
     return model
 
@@ -110,20 +141,21 @@ mode = st.sidebar.radio("Market:", ["Buy Apartments", "Rent Apartments"])
 with st.spinner("Loading local data..."):
     df = load_local_data(mode)
 
-if len(df) == 0:
+if df.empty:
+    st.error("No data loaded. Check file existence and format.")
     st.stop()
 
-with st.spinner("Training model and calculating distances..."):
+with st.spinner("Preparing data, training model and calculating features..."):
     model = train_model(df)
 
+    # Default: predicted = actual (if no model)
     df['Predicted_Price'] = df['Price_EUR']
 
     if model is not None:
-        mask = df[['Latitude', 'Longitude']].notna().all(axis=1)
+        mask = df[['Latitude', 'Longitude', 'Area_m2']].notna().all(axis=1)
         if mask.any():
-            df.loc[mask, 'Predicted_Price'] = model.predict(
-                df.loc[mask, ['Area_m2', 'Latitude', 'Longitude']]
-            )
+            preds = model.predict(df.loc[mask, ['Area_m2', 'Latitude', 'Longitude']])
+            df.loc[mask, 'Predicted_Price'] = preds
 
     df['AI_Ratio'] = df['Price_EUR'] / df['Predicted_Price'].replace(0, np.nan)
     df['Good_Deal'] = df['AI_Ratio'] <= 0.85
@@ -131,10 +163,10 @@ with st.spinner("Training model and calculating distances..."):
 
     df['Distance_to_Center_km'] = df.apply(
         lambda row: haversine_distance(
-            row['Latitude'], row['Longitude'],
-            CITY_CENTERS.get(row['City'], (np.nan, np.nan))[0],
-            CITY_CENTERS.get(row['City'], (np.nan, np.nan))[1]
-        ) if row['City'] in CITY_CENTERS else None,
+            row.get('Latitude'), row.get('Longitude'),
+            CITY_CENTERS.get(row.get('City'), (np.nan, np.nan))[0],
+            CITY_CENTERS.get(row.get('City'), (np.nan, np.nan))[1]
+        ) if row.get('City') in CITY_CENTERS else None,
         axis=1
     )
 
@@ -150,6 +182,7 @@ view = st.sidebar.radio("Main Menu:", [
     "Location A/B Comparison",
     "Favorites"
 ])
+
 st.sidebar.markdown("---")
 st.sidebar.header("Filters")
 
@@ -222,7 +255,7 @@ if view == "Interactive Map":
         # Limit markers for performance
         if len(map_df) > 1000:
             display_df = map_df.sample(n=1000, random_state=42)
-            st.info(f"Displaying **1000** random listings out of {len(map_df):,} (performance reasons). All data available in table below.")
+            st.info(f"Displaying **1000** random listings out of {len(map_df):,} (performance reasons).")
         else:
             display_df = map_df
 
@@ -252,7 +285,6 @@ if view == "Interactive Map":
                 HeatMap(heat_data, radius=14, blur=20).add_to(m)
 
             marker_cluster = MarkerCluster().add_to(m)
-
             for _, row in display_df.iterrows():
                 color = "green" if row['Good_Deal'] else "blue"
                 icon_name = "star" if row['Good_Deal'] else "home"
@@ -260,14 +292,14 @@ if view == "Interactive Map":
 
                 popup_html = f"""
                 <div style="width:260px; font-size:13px;">
-                    <b>{row['Title']}</b><br>
-                    <small>{row.get('Street', '')} • {row['District']}</small><hr>
+                    <b>{row.get('Title', 'No title')}</b><br>
+                    <small>{row.get('Street', '')} • {row.get('District', '')}</small><hr>
                     <b>Price:</b> {row['Price_EUR']:,.0f} €<br>
-                    <b>{row['Area_m2']}</b> m²  •  <b>{row['Price_per_m2']:,.0f} €/m²</b><br>
+                    <b>{row['Area_m2']}</b> m²  •  <b>{row.get('Price_per_m2', '–'):,.0f} €/m²</b><br>
                     Walk Score: <b>{row.get('Walk_Score', 50)}</b>/100<br>
                     <small>AI estimate ≈ {row['Predicted_Price']:,.0f} €</small><br>
                     {status_text}<br>
-                    <a href="{row['Link']}" target="_blank" style="display:block; margin-top:8px; background:#0066cc; color:white; text-align:center; padding:6px; border-radius:4px; text-decoration:none;">Open listing</a>
+                    <a href="{row.get('Link', '#')}" target="_blank" style="display:block; margin-top:8px; background:#0066cc; color:white; text-align:center; padding:6px; border-radius:4px; text-decoration:none;">Open listing</a>
                 </div>
                 """
 
@@ -281,7 +313,8 @@ if view == "Interactive Map":
 
         # Quick view table + favorites
         st.subheader("Quick view + add to favorites")
-        display_table = filtered_df[['Title', 'Price_EUR', 'Area_m2', 'Price_per_m2', 'District', 'Link']].copy()
+        cols_to_show = ['Title', 'Price_EUR', 'Area_m2', 'Price_per_m2', 'District', 'Link']
+        display_table = filtered_df[[c for c in cols_to_show if c in filtered_df.columns]].copy()
         display_table.insert(0, "Save", False)
 
         edited_df = st.data_editor(
@@ -295,26 +328,24 @@ if view == "Interactive Map":
         if st.button("Save selected to Favorites"):
             new_items = edited_df[edited_df["Save"]].drop(columns="Save").to_dict("records")
             added_count = 0
+            existing_links = {x['Link'] for x in st.session_state['favorites'] if 'Link' in x}
             for item in new_items:
-                if item['Link'] not in {x['Link'] for x in st.session_state['favorites']}:
+                if item.get('Link') and item['Link'] not in existing_links:
                     st.session_state['favorites'].append(item)
                     added_count += 1
             if added_count > 0:
                 st.success(f"Added **{added_count}** new listings to favorites!")
             else:
-                st.info("All selected items were already in favorites.")
+                st.info("No new items added (already in favorites or no link).")
 
 elif view == "Analytics & Mortgage":
-    # ... your original code for this section ...
-    pass
+    st.info("Analytics & Mortgage section – to be implemented")
 
 elif view == "Location A/B Comparison":
-    # ... your original code ...
-    pass
+    st.info("Location A/B Comparison – to be implemented")
 
 elif view == "Favorites":
-    # ... your original code ...
-    pass
+    st.info("Favorites view – to be implemented")
 
 else:
     st.info("Select a view from the menu on the left.")
