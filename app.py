@@ -8,221 +8,232 @@ from streamlit_folium import st_folium
 import pydeck as pdk
 from sklearn.ensemble import RandomForestRegressor
 
-# --- KONFIGURACIJA ---
-st.set_page_config(page_title="Nekretnine PRO", layout="wide", page_icon="🏢")
+# ────────────────────────────────────────────────
+# CONFIGURATION
+# ────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Real Estate PRO",
+    layout="wide",
+    page_icon="🏢"
+)
 
-CENTRI_GRADOVA = {
-    "Beograd": (44.8150, 20.4612),
+CITY_CENTERS = {
+    "Belgrade": (44.8150, 20.4612),
     "Novi Sad": (45.2516, 19.8369),
     "Niš": (43.3209, 21.8957),
     "Kragujevac": (44.0128, 20.9114)
 }
 
-# Inicijalizacija omiljenih
-if 'omiljeni' not in st.session_state:
-    st.session_state['omiljeni'] = []
+# Initialize favorites
+if 'favorites' not in st.session_state:
+    st.session_state['favorites'] = []
 
-# --- POMOĆNE FUNKCIJE ---
+# ────────────────────────────────────────────────
+# HELPER FUNCTIONS
+# ────────────────────────────────────────────────
 def haversine_distance(lat1, lon1, lat2, lon2):
     if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
         return None
-    R = 6371
+    R = 6371  # Earth radius in km
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+
 @st.cache_data
-def load_local_data(rezim_rada):
-    if rezim_rada == "Kupovina stanova":
+def load_local_data(mode):
+    if mode == "Buy Apartments":
         file_path = "nekretnina_srb_geo.csv"
     else:
         file_path = "izdavanje_srb_geo.csv"
-    
+
     try:
         df = pd.read_csv(file_path, low_memory=False)
-        
-        # Pretpostavljeni nazivi kolona – prilagodi ako su drugačiji!
+
+        # Expected column name mapping – adjust if your CSV uses different names
         expected_cols = {
-            'grad': 'Grad',
-            'deoGrada': 'Deo_Grada',
-            'ulica': 'Ulica',
-            'cenaEur': 'Cena_EUR',
-            'kvadraturaM2': 'Kvadratura_m2',
-            'cenaPoM2': 'Cena_po_m2',
-            'naslov': 'Naslov',
+            'grad': 'City',
+            'deoGrada': 'District',
+            'ulica': 'Street',
+            'cenaEur': 'Price_EUR',
+            'kvadraturaM2': 'Area_m2',
+            'cenaPoM2': 'Price_per_m2',
+            'naslov': 'Title',
             'link': 'Link',
             'latitude': 'Latitude',
             'longitude': 'Longitude'
         }
-        
-        # Preimenujemo samo one kolone koje postoje
+
+        # Rename only columns that exist
         rename_dict = {k: v for k, v in expected_cols.items() if k in df.columns}
         df = df.rename(columns=rename_dict)
-        
-        # Osiguravamo numeričke kolone
-        for col in ['Latitude', 'Longitude', 'Cena_EUR', 'Kvadratura_m2', 'Cena_po_m2']:
+
+        # Ensure numeric columns
+        for col in ['Latitude', 'Longitude', 'Price_EUR', 'Area_m2', 'Price_per_m2']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-        
+
         return df
-    
+
     except FileNotFoundError:
-        st.error(f" fajl **{file_path}** nije pronađen u folderu aplikacije.")
+        st.error(f"File **{file_path}** not found in the application folder.")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Greška pri učitavanju fajla: {e}")
+        st.error(f"Error loading file: {e}")
         return pd.DataFrame()
+
 
 @st.cache_resource
 def train_model(data):
-    valid_data = data.dropna(subset=['Kvadratura_m2', 'Latitude', 'Longitude', 'Cena_EUR'])
+    valid_data = data.dropna(subset=['Area_m2', 'Latitude', 'Longitude', 'Price_EUR'])
     if len(valid_data) < 10:
         return None
-    
-    X = valid_data[['Kvadratura_m2', 'Latitude', 'Longitude']]
-    y = valid_data['Cena_EUR']
+
+    X = valid_data[['Area_m2', 'Latitude', 'Longitude']]
+    y = valid_data['Price_EUR']
     model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
     model.fit(X, y)
     return model
 
+
 # ────────────────────────────────────────────────
-#               GLAVNI DEO APLIKACIJE
+# MAIN APPLICATION
 # ────────────────────────────────────────────────
+st.title("Real Estate Market Analytics (Local CSV)")
 
-st.title("Analitika Tržišta Nekretnina (lokalni CSV)")
+# ── SIDEBAR ──
+st.sidebar.header("Settings")
+mode = st.sidebar.radio("Market:", ["Buy Apartments", "Rent Apartments"])
 
-# SIDEBAR
-st.sidebar.header("⚙️ Podešavanja")
-rezim = st.sidebar.radio("Tržište:", ["Kupovina stanova", "Izdavanje stanova"])
-
-with st.spinner("Učitavam lokalne podatke..."):
-    df = load_local_data(rezim)
+with st.spinner("Loading local data..."):
+    df = load_local_data(mode)
 
 if len(df) == 0:
     st.stop()
 
-with st.spinner("Treniram model i računam distance..."):
+with st.spinner("Training model and calculating distances..."):
     model = train_model(df)
-    
-    df['Predvidjena_Cena'] = df['Cena_EUR']
+
+    df['Predicted_Price'] = df['Price_EUR']
+
     if model is not None:
         mask = df[['Latitude', 'Longitude']].notna().all(axis=1)
         if mask.any():
-            df.loc[mask, 'Predvidjena_Cena'] = model.predict(
-                df.loc[mask, ['Kvadratura_m2', 'Latitude', 'Longitude']]
+            df.loc[mask, 'Predicted_Price'] = model.predict(
+                df.loc[mask, ['Area_m2', 'Latitude', 'Longitude']]
             )
-    
-    df['Odnos_AI'] = df['Cena_EUR'] / df['Predvidjena_Cena'].replace(0, np.nan)
-    df['Dobra_Prilika'] = df['Odnos_AI'] <= 0.85
-    df['Sumnjivo_Nisko'] = df['Odnos_AI'] <= 0.45
-    
-    df['Udaljenost_Centar_km'] = df.apply(
+
+    df['AI_Ratio'] = df['Price_EUR'] / df['Predicted_Price'].replace(0, np.nan)
+    df['Good_Deal'] = df['AI_Ratio'] <= 0.85
+    df['Suspiciously_Low'] = df['AI_Ratio'] <= 0.45
+
+    df['Distance_to_Center_km'] = df.apply(
         lambda row: haversine_distance(
             row['Latitude'], row['Longitude'],
-            CENTRI_GRADOVA.get(row['Grad'], (np.nan, np.nan))[0],
-            CENTRI_GRADOVA.get(row['Grad'], (np.nan, np.nan))[1]
-        ) if row['Grad'] in CENTRI_GRADOVA else None,
+            CITY_CENTERS.get(row['City'], (np.nan, np.nan))[0],
+            CITY_CENTERS.get(row['City'], (np.nan, np.nan))[1]
+        ) if row['City'] in CITY_CENTERS else None,
         axis=1
     )
-    
-    df['Walk_Score'] = df['Udaljenost_Centar_km'].apply(
+
+    df['Walk_Score'] = df['Distance_to_Center_km'].apply(
         lambda x: max(0, min(100, int(100 - (x or 0) * 8))) if pd.notna(x) else 50
     )
 
-# ────────────── SIDEBAR FILTERI ──────────────
+# ── SIDEBAR FILTERS ──
 st.sidebar.markdown("---")
-prikaz = st.sidebar.radio("🧭 Glavni meni:", [
-    "📍 Interaktivna Mapa",
-    "📈 Analitika & Krediti",
-    "⚖️ A/B Poređenje Lokacija",
-    "⭐ Omiljeni Oglasi",
+view = st.sidebar.radio("Main Menu:", [
+    "Interactive Map",
+    "Analytics & Mortgage",
+    "Location A/B Comparison",
+    "Favorites"
 ])
-
 st.sidebar.markdown("---")
-st.sidebar.header("🔍 Filteri")
+st.sidebar.header("Filters")
 
-gradovi = ["Svi"] + sorted(df['Grad'].dropna().unique().tolist())
-izabrani_grad = st.sidebar.selectbox("Grad:", gradovi)
+cities = ["All"] + sorted(df['City'].dropna().unique().tolist())
+selected_city = st.sidebar.selectbox("City:", cities)
 
-label_cena = "Cena (EUR)" if rezim == "Kupovina stanova" else "Mesečna kirija (EUR)"
-max_c = 300000 if rezim == "Kupovina stanova" else 2000
+price_label = "Price (EUR)" if mode == "Buy Apartments" else "Monthly Rent (EUR)"
+max_price_default = 300000 if mode == "Buy Apartments" else 2000
 
-cena_opseg = st.sidebar.slider(
-    label_cena,
-    int(df['Cena_EUR'].min(skipna=True) or 0),
-    int(df['Cena_EUR'].max(skipna=True) or max_c),
-    (int(df['Cena_EUR'].min(skipna=True) or 0), int(df['Cena_EUR'].max(skipna=True) or max_c))
+price_range = st.sidebar.slider(
+    price_label,
+    int(df['Price_EUR'].min(skipna=True) or 0),
+    int(df['Price_EUR'].max(skipna=True) or max_price_default),
+    (int(df['Price_EUR'].min(skipna=True) or 0), int(df['Price_EUR'].max(skipna=True) or max_price_default))
 )
 
-m2_opseg = st.sidebar.slider(
-    "Cena po m² (EUR):",
-    int(df['Cena_po_m2'].min(skipna=True) or 0),
-    int(df['Cena_po_m2'].max(skipna=True) or 5000),
-    (int(df['Cena_po_m2'].min(skipna=True) or 0), int(df['Cena_po_m2'].max(skipna=True) or 5000))
+price_m2_range = st.sidebar.slider(
+    "Price per m² (EUR):",
+    int(df['Price_per_m2'].min(skipna=True) or 0),
+    int(df['Price_per_m2'].max(skipna=True) or 5000),
+    (int(df['Price_per_m2'].min(skipna=True) or 0), int(df['Price_per_m2'].max(skipna=True) or 5000))
 )
 
-kv_opseg = st.sidebar.slider(
-    "Kvadratura (m²):",
-    int(df['Kvadratura_m2'].min(skipna=True) or 10),
-    int(df['Kvadratura_m2'].max(skipna=True) or 200),
-    (int(df['Kvadratura_m2'].min(skipna=True) or 10), int(df['Kvadratura_m2'].max(skipna=True) or 200))
+area_range = st.sidebar.slider(
+    "Area (m²):",
+    int(df['Area_m2'].min(skipna=True) or 10),
+    int(df['Area_m2'].max(skipna=True) or 200),
+    (int(df['Area_m2'].min(skipna=True) or 10), int(df['Area_m2'].max(skipna=True) or 200))
 )
 
-if izabrani_grad in CENTRI_GRADOVA:
-    max_dist = math.ceil(df[df['Grad'] == izabrani_grad]['Udaljenost_Centar_km'].max() or 20)
-    dist_opseg = st.sidebar.slider("Udaljenost od centra (km):", 0, max_dist, max_dist)
+if selected_city in CITY_CENTERS:
+    max_dist = math.ceil(df[df['City'] == selected_city]['Distance_to_Center_km'].max() or 20)
+    distance_range = st.sidebar.slider("Distance from center (km):", 0, max_dist, max_dist)
 else:
-    dist_opseg = 999
+    distance_range = 999
 
-samo_prilike = st.sidebar.checkbox("🌟 Samo 'Zlatne Prilike'")
-prikazi_heatmap = st.sidebar.checkbox("🔥 Toplotna mapa")
-prikazi_3d = st.sidebar.checkbox("🏙️ 3D gustina (PyDeck)")
+only_good_deals = st.sidebar.checkbox("Show only 'Great Deals'")
+show_heatmap = st.sidebar.checkbox("Show Heatmap")
+show_3d = st.sidebar.checkbox("Show 3D Density (PyDeck)")
 
-# FILTRIRANJE
-f_df = df[
-    (df['Cena_EUR'] >= cena_opseg[0]) & (df['Cena_EUR'] <= cena_opseg[1]) &
-    (df['Cena_po_m2'] >= m2_opseg[0]) & (df['Cena_po_m2'] <= m2_opseg[1]) &
-    (df['Kvadratura_m2'] >= kv_opseg[0]) & (df['Kvadratura_m2'] <= kv_opseg[1])
+# ── FILTERING ──
+filtered_df = df[
+    (df['Price_EUR'] >= price_range[0]) & (df['Price_EUR'] <= price_range[1]) &
+    (df['Price_per_m2'] >= price_m2_range[0]) & (df['Price_per_m2'] <= price_m2_range[1]) &
+    (df['Area_m2'] >= area_range[0]) & (df['Area_m2'] <= area_range[1])
 ]
 
-if izabrani_grad != "Svi":
-    f_df = f_df[f_df['Grad'] == izabrani_grad]
-    if izabrani_grad in CENTRI_GRADOVA:
-        f_df = f_df[f_df['Udaljenost_Centar_km'] <= dist_opseg]
+if selected_city != "All":
+    filtered_df = filtered_df[filtered_df['City'] == selected_city]
+    if selected_city in CITY_CENTERS:
+        filtered_df = filtered_df[filtered_df['Distance_to_Center_km'] <= distance_range]
 
-if samo_prilike:
-    f_df = f_df[f_df['Dobra_Prilika']]
+if only_good_deals:
+    filtered_df = filtered_df[filtered_df['Good_Deal']]
 
-f_df = f_df[~f_df['Sumnjivo_Nisko']]
+filtered_df = filtered_df[~filtered_df['Suspiciously_Low']]
 
-map_df = f_df.dropna(subset=['Latitude', 'Longitude'])
+map_df = filtered_df.dropna(subset=['Latitude', 'Longitude'])
 
-# ────────────── PRIKAZ PO MODOVIMA ──────────────
-
-if prikaz == "📍 Interaktivna Mapa":
-    st.header("Geoprostorna analiza")
-    st.markdown(f"**Pronađeno ukupno {len(f_df):,} oglasa**    Prosečna {label_cena.lower()}: **{f_df['Cena_EUR'].mean():,.0f} €**")
+# ────────────────────────────────────────────────
+# VIEW SELECTION
+# ────────────────────────────────────────────────
+if view == "Interactive Map":
+    st.header("Geospatial Analysis")
+    st.markdown(f"**Found {len(filtered_df):,} listings**   Average {price_label.lower()}: **{filtered_df['Price_EUR'].mean():,.0f} €**")
 
     if len(map_df) == 0:
-        st.warning("Nema oglasa sa ispravnim koordinatama nakon filtera.")
+        st.warning("No listings with valid coordinates after filtering.")
     else:
-        # Limit prikaza markera
+        # Limit markers for performance
         if len(map_df) > 1000:
-            prikaz_df = map_df.sample(n=1000, random_state=42)   # ili .head(1000)
-            st.info(f"Prikazano **1000** nasumičnih oglasa od ukupno {len(map_df):,} (zbog performansi). Svi podaci su u tabeli ispod.")
+            display_df = map_df.sample(n=1000, random_state=42)
+            st.info(f"Displaying **1000** random listings out of {len(map_df):,} (performance reasons). All data available in table below.")
         else:
-            prikaz_df = map_df
+            display_df = map_df
 
-        start_lat = prikaz_df['Latitude'].median()
-        start_lon = prikaz_df['Longitude'].median()
+        center_lat = display_df['Latitude'].median()
+        center_lon = display_df['Longitude'].median()
 
-        if prikazi_3d:
-            st.subheader("3D Hexagon gustina")
+        if show_3d:
+            st.subheader("3D Hexagon Density")
             layer = pdk.Layer(
                 'HexagonLayer',
-                data=prikaz_df,
+                data=display_df,
                 get_position='[Longitude, Latitude]',
                 radius=150,
                 elevation_scale=15,
@@ -230,81 +241,80 @@ if prikaz == "📍 Interaktivna Mapa":
                 extruded=True,
                 pickable=True,
             )
-            view_state = pdk.ViewState(latitude=start_lat, longitude=start_lon, zoom=11, pitch=50)
+            view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=50)
             st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state))
-
         else:
-            m = folium.Map(location=[start_lat, start_lon], zoom_start=12, tiles="CartoDB positron")
+            m = folium.Map(location=[center_lat, center_lon], zoom_start=12, tiles="CartoDB positron")
             Draw(export=True).add_to(m)
 
-            if prikazi_heatmap:
-                heat_data = [[r['Latitude'], r['Longitude'], r['Cena_po_m2']] for _, r in prikaz_df.iterrows()]
+            if show_heatmap:
+                heat_data = [[r['Latitude'], r['Longitude'], r['Price_per_m2']] for _, r in display_df.iterrows()]
                 HeatMap(heat_data, radius=14, blur=20).add_to(m)
 
             marker_cluster = MarkerCluster().add_to(m)
 
-            for _, row in prikaz_df.iterrows():
-                boja = "green" if row['Dobra_Prilika'] else "blue"
-                ikona = "star" if row['Dobra_Prilika'] else "home"
-                status = "<b style='color:green;'>🌟 Odlična prilika!</b>" if row['Dobra_Prilika'] else "Realna cena"
+            for _, row in display_df.iterrows():
+                color = "green" if row['Good_Deal'] else "blue"
+                icon_name = "star" if row['Good_Deal'] else "home"
+                status_text = "<b style='color:green;'>Great Deal!</b>" if row['Good_Deal'] else "Fair price"
 
-                html = f"""
+                popup_html = f"""
                 <div style="width:260px; font-size:13px;">
-                    <b>{row['Naslov']}</b><br>
-                    <small>{row.get('Ulica','')} • {row['Deo_Grada']}</small><hr>
-                    <b>Cena:</b> {row['Cena_EUR']:,.0f} €<br>
-                    <b>{row['Kvadratura_m2']}</b> m²  •  <b>{row['Cena_po_m2']:,.0f} €/m²</b><br>
-                    Walk Score: <b>{row.get('Walk_Score',50)}</b>/100<br>
-                    <small>AI procena ≈ {row['Predvidjena_Cena']:,.0f} €</small><br>
-                    {status}<br>
-                    <a href="{row['Link']}" target="_blank" style="display:block; margin-top:8px; background:#0066cc; color:white; text-align:center; padding:6px; border-radius:4px; text-decoration:none;">Otvori oglas</a>
+                    <b>{row['Title']}</b><br>
+                    <small>{row.get('Street', '')} • {row['District']}</small><hr>
+                    <b>Price:</b> {row['Price_EUR']:,.0f} €<br>
+                    <b>{row['Area_m2']}</b> m²  •  <b>{row['Price_per_m2']:,.0f} €/m²</b><br>
+                    Walk Score: <b>{row.get('Walk_Score', 50)}</b>/100<br>
+                    <small>AI estimate ≈ {row['Predicted_Price']:,.0f} €</small><br>
+                    {status_text}<br>
+                    <a href="{row['Link']}" target="_blank" style="display:block; margin-top:8px; background:#0066cc; color:white; text-align:center; padding:6px; border-radius:4px; text-decoration:none;">Open listing</a>
                 </div>
                 """
 
                 folium.Marker(
                     location=[row['Latitude'], row['Longitude']],
-                    popup=folium.Popup(html, max_width=320),
-                    icon=folium.Icon(color=boja, icon=ikona, prefix="fa")
+                    popup=folium.Popup(popup_html, max_width=320),
+                    icon=folium.Icon(color=color, icon=icon_name, prefix="fa")
                 ).add_to(marker_cluster)
 
             st_folium(m, width="100%", height=600)
 
-        # Tabela za čuvanje
-        st.subheader("Brzi pregled + dodaj u omiljene")
-        df_prikaz = f_df[['Naslov', 'Cena_EUR', 'Kvadratura_m2', 'Cena_po_m2', 'Deo_Grada', 'Link']].copy()
-        df_prikaz.insert(0, "Sačuvaj", False)
+        # Quick view table + favorites
+        st.subheader("Quick view + add to favorites")
+        display_table = filtered_df[['Title', 'Price_EUR', 'Area_m2', 'Price_per_m2', 'District', 'Link']].copy()
+        display_table.insert(0, "Save", False)
 
-        edited = st.data_editor(
-            df_prikaz,
-            column_config={"Sačuvaj": st.column_config.CheckboxColumn(required=True)},
+        edited_df = st.data_editor(
+            display_table,
+            column_config={"Save": st.column_config.CheckboxColumn(required=True)},
             hide_index=True,
             use_container_width=True,
             num_rows="dynamic"
         )
 
-        if st.button("Sačuvaj označene u Omiljene"):
-            novi = edited[edited["Sačuvaj"]].drop(columns="Sačuvaj").to_dict("records")
-            added = 0
-            for oglas in novi:
-                if oglas['Link'] not in {x['Link'] for x in st.session_state['omiljeni']}:
-                    st.session_state['omiljeni'].append(oglas)
-                    added += 1
-            if added > 0:
-                st.success(f"Dodato **{added}** novih oglasa u omiljene!")
+        if st.button("Save selected to Favorites"):
+            new_items = edited_df[edited_df["Save"]].drop(columns="Save").to_dict("records")
+            added_count = 0
+            for item in new_items:
+                if item['Link'] not in {x['Link'] for x in st.session_state['favorites']}:
+                    st.session_state['favorites'].append(item)
+                    added_count += 1
+            if added_count > 0:
+                st.success(f"Added **{added_count}** new listings to favorites!")
             else:
-                st.info("Svi označeni su već u omiljenima.")
+                st.info("All selected items were already in favorites.")
 
-# Ostali prikazi (Analitika, A/B, Omiljeni) ostaju isti kao u originalu...
-# (možeš ih kopirati iz prethodne verzije – izmene su uglavnom bile u učitavanju i mapiranju)
+elif view == "Analytics & Mortgage":
+    # ... your original code for this section ...
+    pass
 
-elif prikaz == "📈 Analitika & Krediti":
-    # ... tvoj originalni kod za ovaj deo ...
+elif view == "Location A/B Comparison":
+    # ... your original code ...
+    pass
 
-elif prikaz == "⚖️ A/B Poređenje Lokacija":
-    # ... tvoj originalni kod ...
-
-elif prikaz == "⭐ Omiljeni Oglasi":
-    # ... tvoj originalni kod ...
+elif view == "Favorites":
+    # ... your original code ...
+    pass
 
 else:
-    st.info("Odaberi prikaz iz menija levo.")
+    st.info("Select a view from the menu on the left.")
