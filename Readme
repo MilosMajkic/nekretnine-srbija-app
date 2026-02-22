@@ -1,0 +1,170 @@
+# Nekretnine PRO – Serbian Real Estate Market Analytics
+
+Interactive web application for geospatial analysis, price prediction, and opportunity detection on the Serbian residential property market (sale and rental).
+
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![GitHub stars](https://img.shields.io/github/stars/MilosMajkic/nekretnine-pro?style=social)
+![GitHub forks](https://img.shields.io/github/forks/MilosMajkic/nekretnine-pro?style=social)
+![GitHub watchers](https://img.shields.io/github/watchers/MilosMajkic/nekretnine-pro?style=social)
+
+## Features
+
+- Interactive geospatial map (Folium + MarkerCluster + HeatMap + Draw tools)
+- 3D density visualization (PyDeck HexagonLayer)
+- Machine-learning price prediction (Random Forest)
+- Value scoring: "Golden opportunities" (≤ 85% of predicted value) and "suspiciously low" (≤ 45%)
+- Approximate Walk Score based on distance to city center
+- Comprehensive filtering: city, price, price/m², floor area, distance
+- Favorites system for saving and comparing listings
+- Location A/B comparison module
+- Support for both sale and rental market datasets
+
+## Technology Stack
+
+| Layer                | Technology                               |
+|----------------------|------------------------------------------|
+| Web Framework        | Streamlit                                |
+| Geospatial           | Folium · streamlit-folium · PyDeck       |
+| Data Processing      | pandas · numpy                           |
+| Machine Learning     | scikit-learn (RandomForestRegressor)     |
+| Clustering & Heatmap | folium.plugins (MarkerCluster, HeatMap)  |
+| Distance             | Haversine formula                        |
+| State Management     | streamlit.session_state                  |
+
+## Installation
+
+1. Clone the repository
+
+```bash
+git clone https://github.com/MilosMajkic/nekretnine-pro.git
+cd nekretnine-pro
+
+Create virtual environment
+
+Bashpython -m venv .venv
+source .venv/bin/activate      # Linux/macOS
+# or on Windows:
+# .venv\Scripts\activate
+
+Install dependencies
+
+Bashpip install -r requirements.txt
+Typical requirements.txt:
+textstreamlit>=1.31.0
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+folium>=0.14.0
+streamlit-folium>=0.17.0
+pydeck>=0.8.0
+
+Prepare input data
+
+Place CSV files in the project root:
+
+nekretnina_srb_geo.csv     (sale listings)
+izdavanje_srb_geo.csv      (rental listings)
+
+Required / recommended columns:
+
+Grad, Deo_Grada, Ulica
+Cena_EUR, Kvadratura_m2, Cena_po_m2
+Naslov, Link
+Latitude, Longitude
+
+
+Run the application
+
+Bashstreamlit run app.py
+Continuous Integration (GitHub Actions)
+Basic linting + dependency check workflow (.github/workflows/ci.yml):
+YAMLname: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff pytest
+
+    - name: Lint with Ruff
+      run: ruff check . --output-format=github
+
+    - name: Run tests (if any)
+      run: pytest
+      continue-on-error: true
+Deployment
+Recommended platforms (easiest → more control):
+
+Streamlit Community Cloud
+Connect GitHub repository → automatic deploy
+Docker + Railway / Render / Fly.io
+
+Example minimal Dockerfile:
+dockerfileFROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8501
+HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+Contributing
+Contributions are welcome — bug fixes, new features, documentation improvements, better models, additional cities, etc.
+Development workflow
+
+Fork the repository
+Create a feature branch (git checkout -b feature/amazing-feature)
+Commit your changes (git commit -m 'Add support for Novi Pazar')
+Push to the branch (git push origin feature/amazing-feature)
+Open a Pull Request
+
+Coding style
+
+Follow PEP 8
+Use type hints where reasonable
+Prefer @st.cache_data / @st.cache_resource for expensive operations
+Keep sidebar filters clearly grouped
+
+Pull Request Checklist
+
+ Tests pass (or new tests added)
+ Code is linted (ruff check .)
+ Documentation / README updated if needed
+ No large data files committed
+
+Planned Improvements
+
+Scheduled data refresh pipeline
+More ML models (XGBoost, LightGBM, neural nets)
+Additional property features (floor, year built, heating type, ...)
+Price trend analysis over time
+Filtered data export (CSV / Excel)
+Mobile-friendly layout improvements
+Optional Mapbox / Google Maps integration
+
+License
+MIT License
+See the LICENSE file for details.
+Author
+Milos Majkić
+Junior Web Engineer – Belgrade, Serbia
+Last updated: February 2026
